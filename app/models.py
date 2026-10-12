@@ -83,6 +83,7 @@ class Stops(SQLModel, table=True):
   name: str = Field(max_length=128, unique=True)
   latitude: float
   longitude: float
+  opposite: uuid.UUID | None = Field(default=None, foreign_key="stops.id", index=True)
   city: uuid.UUID = Field(foreign_key="city.id")
   country: uuid.UUID = Field(foreign_key="country.id")
 

@@ -70,7 +70,7 @@ def get_directions(request: Request, session: SessionDep, user: CurrentUser, sta
   total_price: float = 0.0
   total_time: float = 0.0
 
-  if actual_start[1]:
+  if actual_start[0]:
     # we make assumptions here because we can either have (RB, False) or (None, True)
     start_rb = actual_start[0]
     route_blocks.append(start_rb.rb)
@@ -95,7 +95,7 @@ def get_directions(request: Request, session: SessionDep, user: CurrentUser, sta
     route_blocks.append({"route_position": stop_count, "start_node": start_node, "stop_node": stop_node, "route": route, "route_geometry": osm_path})
     stop_count+=1
 
-  if actual_stop[1]:
+  if actual_stop[0]:
     stop_rb = actual_start[0]
     v = stop_rb.rb
     v.route_position = stop_count
