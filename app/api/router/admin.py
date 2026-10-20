@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, status, Query, Request
 from sqlmodel import select, or_
 from sqlalchemy.exc import IntegrityError
 from app.api.deps import SessionDep, AdminDep, Depends, get_current_superuser
-from app.models import Country, City, StopsIn, Stops, get_datetime_utc, Records, AdminAction, Route, RouteIn, TransportMode, CityBase, TripStore, PlaceIn, Place
+from app.models import Country, City, StopsIn, Stops, get_datetime_utc, Records, AdminAction, Route, RouteIn, TransportMode, CityBase, TripStore, PlaceInAdmin, Place
 from app.api.lib.sage_engine import refresh_sage_graph, SG, loader
 from app.core.rlimiter import limiter
 
@@ -294,7 +294,7 @@ def edit_city(request: Request, session: SessionDep, admin_user: AdminDep, city_
 # places api
 @router.post("/places/add", status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")
-def add_place(request: Request, session: SessionDep, admin_user: AdminDep, payload: PlaceIn):
+def add_place(request: Request, session: SessionDep, admin_user: AdminDep, payload: PlaceInAdmin):
   """Create a place"""
   if not loader.check_country(payload.country):
     raise HTTPException(detail="The country provided does not exist!", status_code=status.HTTP_400_BAD_REQUEST)
@@ -335,7 +335,7 @@ def toggle_place_activeness(request: Request, session: SessionDep, admin_user: A
 
 @router.put("/places/update/{place_id}", status_code=status.HTTP_200_OK)
 @limiter.limit("10/minute")
-def update_place(request: Request, session: SessionDep, admin_user: AdminDep, place_id: uuid.UUID, payload: PlaceIn):
+def update_place(request: Request, session: SessionDep, admin_user: AdminDep, place_id: uuid.UUID, payload: PlaceInAdmin):
   """Update a place"""
   if not loader.check_country(payload.country):
     raise HTTPException(detail="The country provided does not exist!", status_code=status.HTTP_400_BAD_REQUEST)

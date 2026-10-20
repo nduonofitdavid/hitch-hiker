@@ -106,6 +106,7 @@ class CachedStop:
   name: str
   latitude: float
   longitude: float
+  opposite: uuid.UUID | None
   city: uuid.UUID
   country: uuid.UUID
 
@@ -233,26 +234,63 @@ class UserStatsOut(SQLModel):
   total_spent: float
   average_time: float
 
+class Contributor(SQLModel, table=True):
+  id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
+  is_enabled: bool = False
+  data_joined: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
+  approved_by: uuid.UUID = Field(foreign_key="user.id", index=True)
+
+class ContributionStatus(IntEnum):
+  ACCEPTED=0
+  PENDING=1
+  DENIED=2
+
+class ContributorAction(IntEnum):
+  CREATE=0
+  UPDATE=2
+  REQUEST_DELETION=3
+
+class ContributorRecord(SQLModel, table=True):
+  id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  contributor_id: uuid.UUID = Field(foreign_key="contributor.id", index=True)
+  action_type: ContributorAction
+  contribution_status: ContributionStatus
+  description: str = Field(max_length=128)
+  reviewed_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
+
+class FlagPlace(SQLModel, table=True):
+  id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  flagged_by: uuid.UUID = Field(foreign_key="user.id", index=True)
+  reason: str = Field(max_length=128)
+  place_id: uuid.UUID = Field(foreign_key="place.id", index=True)
+  date_flagged: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
+
 # places
 class PlaceType(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
   name: str = Field(max_length=50, index=True)
   description: str = Field(min_length=25, max_length=128)
 
-class PlaceIn(SQLModel):
+class PlaceInUser(SQLModel):
   name: str = Field(max_length=128)
   latitude: float
   longitude: float
-  is_active: bool
   description: str = Field(min_length=50, max_length=256)
+  place_type: uuid.UUID | None
   city: uuid.UUID
   country: uuid.UUID
 
-class Place(PlaceIn, table=True):
+class PlaceInAdmin(PlaceInUser):
+  is_active: bool
+
+class Place(PlaceInAdmin, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  place_type: uuid.UUID | None = Field(default=None, foreign_key="placetype.id")
   city: uuid.UUID = Field(foreign_key="city.id", index=True)
   country: uuid.UUID = Field(foreign_key="country.id", index=True)
   visited_users: list[User] = Relationship(back_populates="places_visited", link_model=PlacesUserVisitedLink)
+  created_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
 
   __table_args__ = (
     UniqueConstraint(

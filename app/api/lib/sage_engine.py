@@ -26,7 +26,7 @@ class Loader:
       return self.stop_cache
     stops = session.exec(select(Stops)).all()
     for stop in stops:
-      self.stop_cache[stop.id] = CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, city=stop.city, country=stop.country)
+      self.stop_cache[stop.id] = CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, opposite=None, city=stop.city, country=stop.country)
     return self.stop_cache
 
   def load_countries(self, session: Session, use_cache: bool=True):
