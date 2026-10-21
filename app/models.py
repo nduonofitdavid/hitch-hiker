@@ -84,8 +84,10 @@ class Stops(SQLModel, table=True):
   latitude: float
   longitude: float
   opposite: uuid.UUID | None = Field(default=None, foreign_key="stops.id", index=True)
+  is_active: bool = Field(default=True)
   city: uuid.UUID = Field(foreign_key="city.id")
   country: uuid.UUID = Field(foreign_key="country.id")
+  contributed_by: uuid.UUID | None = Field(default=None, foreign_key="user.id")
 
   def get_coords(self) -> tuple[float, float]:
     return self.latitude, self.longitude
@@ -145,6 +147,8 @@ class Route(SQLModel, table=True):
   end: uuid.UUID = Field(foreign_key="stops.id")
   time: float
   price: float
+  is_active: bool = Field(default=True)
+  contributed_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
   transport_modes: list["TransportMode"] = Relationship(back_populates="routes", link_model=TransportModeRouteLink)
 
 @dataclass(slots=True)
@@ -234,12 +238,13 @@ class UserStatsOut(SQLModel):
   total_spent: float
   average_time: float
 
+# contributor
 class Contributor(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
   user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
   is_enabled: bool = False
-  data_joined: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
-  approved_by: uuid.UUID = Field(foreign_key="user.id", index=True)
+  date_joined: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
+  approved_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
 
 class ContributionStatus(IntEnum):
   ACCEPTED=0
@@ -256,15 +261,41 @@ class ContributorRecord(SQLModel, table=True):
   contributor_id: uuid.UUID = Field(foreign_key="contributor.id", index=True)
   action_type: ContributorAction
   contribution_status: ContributionStatus
-  description: str = Field(max_length=128)
+  description: str = Field(min_length=15, max_length=128)
   reviewed_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
+
+class FlagStatus(IntEnum):
+  PENDING=0
+  RESOLVED=1
 
 class FlagPlace(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
   flagged_by: uuid.UUID = Field(foreign_key="user.id", index=True)
-  reason: str = Field(max_length=128)
+  reason: str = Field(min_length=15, max_length=128)
   place_id: uuid.UUID = Field(foreign_key="place.id", index=True)
+  status: FlagStatus = Field(default=FlagStatus.PENDING)
   date_flagged: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
+
+class FlagStop(SQLModel, table=True):
+  id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  flagged_by: uuid.UUID = Field(foreign_key="user.id", index=True)
+  reason: str = Field(min_length=15, max_length=128)
+  stop_id: uuid.UUID = Field(foreign_key="stops.id", index=True)
+  status: FlagStatus = Field(default=FlagStatus.PENDING)
+  date_flagged: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
+
+class FlagRoute(SQLModel, table=True):
+  id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  flagged_by: uuid.UUID = Field(foreign_key="user.id", index=True)
+  reason: str = Field(min_length=15, max_length=128)
+  route_id: uuid.UUID = Field(foreign_key="route.id", index=True)
+  status: FlagStatus = Field(default=FlagStatus.PENDING)
+  date_flagged: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
+
+class ContributorPlaceUpdate(SQLModel):
+  name: str = Field(max_length=128)
+  place_type: uuid.UUID
+  description: str = Field(min_length=15, max_length=128)
 
 # places
 class PlaceType(SQLModel, table=True):

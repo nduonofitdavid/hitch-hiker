@@ -24,7 +24,7 @@ class Loader:
   def load_stops(self, session: Session, use_cache: bool=True):
     if use_cache and self.stop_cache:
       return self.stop_cache
-    stops = session.exec(select(Stops)).all()
+    stops = session.exec(select(Stops).where(Stops.is_active)).all()
     for stop in stops:
       self.stop_cache[stop.id] = CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, opposite=None, city=stop.city, country=stop.country)
     return self.stop_cache
@@ -69,7 +69,7 @@ class Loader:
 
   def load_route_geometry(self, session: Session):
     """Preloads the geometry for the knowledge graph and caches it in a dictionary"""
-    routes = session.exec(select(Route)).all()
+    routes = session.exec(select(Route).where(Route.is_active)).all()
     for route in routes:
       start = self.stop_cache[route.start]
       end = self.stop_cache[route.end]

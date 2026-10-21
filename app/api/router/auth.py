@@ -11,7 +11,7 @@ from app.core.rlimiter import limiter
 from app.models import Token, UserPublic, Message, UserUpdate, NewPassword, UserCreate
 from app.api.deps import SessionDep, CurrentUser, get_current_superuser
 from app import crud
-from app.utils import generate_password_reset_token, generate_reset_password_email, send_email, verify_password_reset_token
+from app.utils import generate_password_reset_token, generate_reset_password_email, send_email, verify_password_reset_token, generate_new_account_email
 
 router = APIRouter(prefix="/auth", tags=["auth", "authentication"])
 
@@ -22,8 +22,12 @@ def create_user(request: Request, session: SessionDep, payload: UserCreate):
   user = crud.get_user_by_email(session=session, email=payload.email)
   if user:
     raise HTTPException(detail="An account already exists with this email!", status_code=status.HTTP_400_BAD_REQUEST)
-  user_n = UserCreate.model_validate(payload)
-  user = crud.create_user(session=session, user_create=user_n)
+  user = crud.create_user(session=session, user_create=payload)
+  
+  if settings.emails_enabled and payload.email:
+    email_data = generate_new_account_email(email_to=payload.email, username=payload.email, password=payload.password)
+    send_email(email_to=payload.email, subject=email_data.subject, html_content=email_data.html_content)
+    
   return user
 
 @router.post('/login/access-token')
