@@ -1,61 +1,81 @@
-# Mini Transport Routing Engine
+# Hitch Hiker
 
-This repository contains a mini transport engine that makes use of dijkstra or a* algorithm, along with some geometric calculations to find the shortest path between two points.
+A Python/FastAPI backend for finding transport routes through an unfamiliar city. It models local stops and connections so a traveller can see where to change transport, which modes to use, and the associated fares and travel times. The current data setup targets Abuja, Nigeria.
 
-## Why Build a Mini Transport Routing Engine
+## How it works
 
-During the early stages of my internship in university, I found myself in a relatively new city, where I had no idea of how to get to places. Platforms like google maps provided me with directions on how to get to a destination, but it was not comprehensive in terms of the step by step process of say, enter a car from your current location, to this loction, it was only optimized for drivers say in cars, who could just drive directly to the destination.
+- **Transport routing:** a graph of stops and directed routes stored in PostgreSQL. The API uses Dijkstra's algorithm to minimize recorded fare or travel time; the engine also includes optional A* support.
+- **Road routing:** a local OpenStreetMap extract is parsed into a NetworkX graph. Coordinates are snapped to road nodes, and road paths provide route geometry and estimated car journeys.
+- **Trip records:** responses contain ordered route segments and a trip ID. Trips can be marked complete and queried alongside user statistics.
 
-The other option was to use services like uber or bolt, but that was not cost efficient, I needed a way to get directions from one place to another, without resulting to asking the locals. 
+The API also includes JWT authentication, password recovery, place lookups, administration endpoints, and contributor submissions and flags.
 
-## How does it work ?
+## Setup
 
-The engine works by using graph traversal algorithms, particularly dijkstra's algorithm, and a* algorithm to find the shortest path between two nodes. Each node is defined as a geographical point on the map, it could be popular junctions where one can find cabs to other junctions, car parks, or metro. A node is defined as:
+Requires Python and PostgreSQL. The repository does not pin a Python version; use one compatible with `requirements.txt`.
 
-``` python
-
-{
-    "id": int,
-    "name": str,
-    "latitude": float,
-    "longitude": float
-}
-
+```sh
+git clone https://github.com/nduonofitdavid/hitch-hiker.git
+cd hitch-hiker
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Each node is connected to a set of other nodes through a route, which indicates that one can catch a cab or any transportation service from that node to another node. A route is represented as:
+Create `app/.env` with these required settings:
 
-``` python
+| Purpose | Settings |
+| --- | --- |
+| Application | `PROJECT_NAME`, `SECRET_KEY` |
+| PostgreSQL connection | `DATABASE_URL`, e.g. `postgresql+psycopg://user:password@localhost/hitch_hiker` |
+| Initial administrator | `FIRST_SUPERUSER`, `FIRST_SUPERUSER_PASSWORD` |
+| Routing and fare estimates | `OPTIMISTIC_SPEED`, `STANDARD_PRICE`, `BASE_PRICE` |
+| Road types and weights | `ROUTABLE`, `ROAD_PENALTY` |
+| Supabase Storage | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `BUCKET_STR` |
 
-{
-    "id": int,
-    "start": int,
-    "end": int,
-    "time": int,
-    "price": int,
-    "bi_directional": bool
-}
+`ROUTABLE` and `ROAD_PENALTY` are Python-literal strings, for example `{'primary', 'residential'}` and `{'primary': 1.0, 'residential': 1.2}`. Include a penalty for each configured road type.
 
+For automatic downloads, the storage bucket must contain `abuja.osm.pbf`, `data.json` (stops), and `route.json` (routes). Missing files download when configuration loads, normally into `/tmp/hhiker/`. To use existing local files, set `OSM_DATA_PATH`, `STOPS_PATH`, and `ROUTES_PATH`; the Supabase settings remain required. SMTP settings and `EMAILS_FROM_EMAIL` enable email delivery.
+
+Create the database, then run migrations and initialize the administrator from the repository root:
+
+```sh
+PYTHONPATH=app alembic -c app/alembic.ini upgrade head
+python -m app.initial_data
 ```
 
-A graph is then built using all the nodes provided and their respective routes. This graph can then be explored using dijkstra or a* algorithm to find the path from a particular node to another, effectively providing navigation directions for the user, although not turn by turn navigation, but necessary to explore a new city (depends on the quality of the data provided).
+Transit-data seeding is currently manual: `app.core.db.add_nodes` imports the stop/route JSON files, but its invocation is commented out in `init_db`. Initialization creates the administrator only. Load transit records before starting the API; migrations and schema compatibility also need validation on a fresh database.
 
-For cases where the user does not want to start their journey from any of the available nodes (i.e junctions, bus stops, parks etc.), the user can enter the latitude and longitude of their starting position, and their destination. 
+```sh
+uvicorn app.main:app --reload
+```
 
-In order for the algorithm to then find a path from the users starting point to their desired destination, it we first find the nearest node (bus station, park, etc.) to that users starting location, and the nearest node to that users destination.
+## API usage
 
-In order to find the nearest node, we pick the node with the lowest distance. The distance is computed using the **haversine** formula which takes into account the curvature of the earth (it's spherical nature, as supposed to using manhathan distance which operates on a 2D grid.) we then pass the nearest node found for both the starting point and the destination into the algorithm, the algorithm then computes the shortest path. When the path is returned, we loop over the nodes in the path to see if there is any node where the distance between the node and the users destination coordinates is within walking distance (this parameter is set as an environment variable as it may vary across locations.) if we find any, we truncate the path at that node in order to avoid instances where the user is directed back and forth.
+Open `http://127.0.0.1:8000/docs` for interactive requests. Routes use the default `/api/v1` prefix. Log in through `/auth/login/access-token` with an OAuth2 password form (`username` is the email address), then authorize requests with the returned bearer token.
 
-A route is then created between the users location, and the starting node in the path, and the ending node in the path and the users destination. In order to compute the time for each their routes, we assumes a base speed of 45km/h for a vehicle, and obtain the time by dividing the distance between them by the optimistic speed. In order to obtain the price, we assume a base price for each hundred meters (this can vary, hence it is an adjustable variable) we then obtain the resulting price by multiplying the base price by the number of 100 meters in the distance. If the price obtained is less than a standard price (this is the standard fare for a trip regardless distance, this can vary, so it is also an editable variable) we use the standard price as the price, else we use the obtained price.
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /trip/` | Stop-to-stop routing; query parameters: `start_id`, `end_id` (UUIDs), `optimize_by` (`0` price, `1` time). |
+| `POST /trip/default` | Road routing; JSON fields: `start_latitude`, `start_longitude`, `stop_latitude`, `stop_longitude`. |
+| `POST /trip/complete/{trip_id}` | Mark a saved trip complete. |
+| `GET /ye/stops`, `/ye/city`, `/ye/country`, `/places/` | Look up transport stops, locations, and places. |
+| `GET /user/trips/summary`, `/user/stats` | Retrieve trip history and statistics. |
 
-The final path and routes is then passed to the display layer of the application.
+Paths in the table are relative to `/api/v1`. Account endpoints live under `/auth`, management under `/admin`, and contributions under `/contribute`.
 
-An interactive html map is also generated and saved to a specified location, which provides visual explanations about the journey's path, although not as detailed as most platforms like Google Maps, OpenStreetMap etc.
+## Source layout
 
-### A* heuristic function
+- `app/api/router/` — HTTP endpoints.
+- `app/api/lib/` — transport and road graphs, geometry, and fare/time helpers.
+- `app/models.py`, `app/crud.py` — database models and account operations.
+- `app/core/` — settings, database initialization, authentication, and rate limiting.
+- `app/alembic/`, `app/email-templates/` — database migrations and email templates.
 
-The heuristic function used for the A* algorithm is similar to that used for obtaining the time for an unknown route. It computes the distance between the two nodes, and then converts that distance to a time assuming a base speed of 45km/h
+## Current limitations
 
-## How to setup the project
+This is a prototype. Transit routing currently requires known stops; automatic connections from arbitrary coordinates to transit stops are unfinished. Coverage depends on supplied data, and fare/time estimates do not use live traffic or pricing. There is no bundled frontend or automated test suite.
 
-More instructions on this soon.
+Some admin, contributor, routing, and statistics workflows need fixes. Public sign-up currently defaults to superuser access, and contributor approval is incomplete; these need correction before public deployment.
+
+Licensed under the **MIT LICENSE**; see the repository's [LICENSE](https://github.com/nduonofitdavid/hitch-hiker/blob/HEAD/LICENSE).
