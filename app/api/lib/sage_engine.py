@@ -17,47 +17,57 @@ class Loader:
     self.stop_cache: dict[uuid.UUID, CachedStop] = {}
     self._route_cache = defaultdict(list)
     self._edge_lookup: dict[tuple[uuid.UUID, uuid.UUID], CachedRoute] = {}
-    self._country_hash: set = set()
-    self._city_hash: set = set()
+    self._country_hash: dict = {}
+    self._city_hash: dict = {}
     self._route_geometry_cache: dict[tuple[uuid.UUID, uuid.UUID], tuple[list[tuple[float, float]], float]] = {}
 
   def load_stops(self, session: Session, use_cache: bool=True):
     if use_cache and self.stop_cache:
       return self.stop_cache
     stops = session.exec(select(Stops).where(Stops.is_active)).all()
+    new_stop_cache = {}
     for stop in stops:
-      self.stop_cache[stop.id] = CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, opposite=None, city=stop.city, country=stop.country)
+      new_stop_cache[stop.id] = CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, opposite=None, city=stop.city, country=stop.country)
+    
+    self.stop_cache = new_stop_cache
     return self.stop_cache
 
   def load_countries(self, session: Session, use_cache: bool=True):
     if use_cache and self._country_hash:
       return self._country_hash
-    countries = session.exec(select(Country.id)).all()
-    self._country_hash = set(countries)
+    countries = session.exec(select(Country.id, Country.name)).all()
+    self._country_hash = {id: name for id, name in countries}
     return self._country_hash
 
-  def load_citites(self, session: Session, use_cache: bool=True):
+  def load_cities(self, session: Session, use_cache: bool=True):
     if use_cache and self._city_hash:
       return self._city_hash
-    citites = session.exec(select(City.id)).all()
-    self._city_hash = set(citites)
+    cities = session.exec(select(City.id, City.name)).all()
+    self._city_hash = {id: name for id, name in cities}
     return self._city_hash
 
-  def check_city(self, city_id: uuid.UUID) -> bool:
-    return city_id in self._city_hash
+  def get_city(self, city_id: uuid.UUID) -> tuple[uuid.UUID, str] | None:
+    return self._city_hash[city_id] if city_id in self._city_hash else None
   
-  def check_country(self, country_id: uuid.UUID) -> bool:
-    return country_id in self._country_hash
+  def get_country(self, country_id: uuid.UUID) -> tuple[uuid.UUID, str] | None:
+    return self._country_hash[country_id] if country_id in self._country_hash else None
   
   def load_routes(self, session: Session, use_cache: bool=True):
     if use_cache and self._route_cache:
       return self._route_cache
 
-    routes = session.exec(select(Route).options(selectinload(Route.transport_modes))).all()
+    routes = session.exec(select(Route).where(Route.is_active == True).options(selectinload(Route.transport_modes))).all()
+    new_route_cache = {}
+    new_edge_lookup = {}
+    
     for route in routes:
       cached_route = CachedRoute(start=route.start, end=route.end, time=route.time, price=route.price, transport_modes=[mode.name for mode in route.transport_modes])
-      self._route_cache[route.start].append(cached_route)
-      self._edge_lookup[(route.start, route.end)] = cached_route
+      new_route_cache[route.start].append(cached_route)
+      new_edge_lookup[(route.start, route.end)] = cached_route
+    
+    self._route_cache = new_route_cache
+    self._edge_lookup = new_edge_lookup
+
     return self._route_cache
     
   def get_route(self, nodes: tuple[uuid.UUID, uuid.UUID]):
@@ -70,6 +80,7 @@ class Loader:
   def load_route_geometry(self, session: Session):
     """Preloads the geometry for the knowledge graph and caches it in a dictionary"""
     routes = session.exec(select(Route).where(Route.is_active)).all()
+    new_routes = {}
     for route in routes:
       start = self.stop_cache[route.start]
       end = self.stop_cache[route.end]
@@ -77,7 +88,9 @@ class Loader:
       if not res:
         continue
       path, dist = res
-      self._route_geometry_cache[(route.start, route.end)] = path, dist
+      new_routes[(route.start, route.end)] = path, dist
+    self._route_geometry_cache = new_routes
+
 
   def get_route_geometry(self, route_key: tuple[uuid.UUID, uuid.UUID]) -> tuple[list[tuple[float, float]], float] | None:
     """Get a route geometry by the route key"""
@@ -89,7 +102,7 @@ class Loader:
     """Refresh the cached data"""
     self.load_stops(session=session, use_cache=False)
     self.load_routes(session=session, use_cache=False)
-    self.load_citites(session=session, use_cache=False)
+    self.load_cities(session=session, use_cache=False)
     self.load_countries(session=session, use_cache=False)
     self.load_route_geometry(session=session)
 
@@ -98,7 +111,7 @@ def init_loader(loader: Loader) -> None:
   with Session(engine) as session:
     loader.load_stops(session=session, use_cache=False)
     loader.load_routes(session=session, use_cache=False)
-    loader.load_citites(session=session, use_cache=False)
+    loader.load_cities(session=session, use_cache=False)
     loader.load_countries(session=session, use_cache=False)
     loader.load_route_geometry(session=session)
 

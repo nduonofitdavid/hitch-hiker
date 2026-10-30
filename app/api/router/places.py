@@ -12,7 +12,7 @@ router = APIRouter(prefix='/places', tags=['places', 'closest'])
 @limiter.limit("5/minute")
 def get_places(request: Request, session: SessionDep, place_id: uuid.UUID | None=None, name: str | None=None, country: uuid.UUID | None=None, city: uuid.UUID | None=None, offset: int=0, limit: int=Query(default=100, le=100)):
   """Get places"""
-  query = select(Place)
+  query = select(Place).where(Place.is_active == True)
   if place_id:
     query = query.where(Place.id == place_id)
   if name:

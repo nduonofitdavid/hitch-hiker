@@ -89,6 +89,7 @@ def get_direction_default(request: Request, session: SessionDep, payload: TripIn
     user_id=user.id,
     distance=dist,
     price=price,
+    time=distance_to_time(dist),
     start_latitude=payload.start_latitude,
     start_longitude=payload.start_longitude,
     stop_latitude=payload.stop_latitude,
@@ -108,6 +109,9 @@ def mark_complete(request: Request, session: SessionDep, trip_id: uuid.UUID, use
   if not trip:
     raise HTTPException(detail="The trip you requested for was not found!", status_code=status.HTTP_400_BAD_REQUEST)
 
+  if trip.trip_status == TripStatus.COMPLETED:
+    raise HTTPException(detail="This trip has already been completed", status_code=status.HTTP_409_CONFLICT)
+  
   trip.trip_status = TripStatus.COMPLETED
   session.add(trip)
   user_stats = session.exec(select(UserStats).where(UserStats.user_id == user.id)).first()
@@ -117,7 +121,7 @@ def mark_complete(request: Request, session: SessionDep, trip_id: uuid.UUID, use
     user_stats.no_of_trips+=1
     user_stats.distance_covered+=trip.distance
     user_stats.total_spent+=trip.price
-    user_stats.average_time+=trip.time
+    user_stats.total_time+=trip.time
   
   session.add(user_stats)
   session.commit()

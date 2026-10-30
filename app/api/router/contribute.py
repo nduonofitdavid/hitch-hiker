@@ -6,7 +6,7 @@ from sqlmodel import select
 
 from app.api.deps import SessionDep, CurrentUser
 from app.api.lib.sage_engine import loader
-from app.models import Place, PlaceInUser, Contributor, PlaceType, ContributorRecord, ContributionStatus, ContributorAction, FlagPlace, get_datetime_utc, StopsIn, Stops, PlaceInUser, ContributorPlaceUpdate, RouteIn, Route, TransportMode, FlagStop
+from app.models import Place, PlaceInUser, Contributor, PlaceType, ContributorRecord, ContributionStatus, ContributorAction, FlagPlace, get_datetime_utc, StopsIn, Stops, PlaceInUser, ContributorPlaceUpdate, RouteIn, Route, TransportMode, FlagStop, FlagRoute
 from app.core.rlimiter import limiter
 from app.core.config import settings
 from app.utils import generate_new_contributor_email, send_email
@@ -89,7 +89,7 @@ def add_route(request: Request, session: SessionDep, current_user: CurrentUser, 
     raise HTTPException(detail="The start location provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
   if payload.end not in loader.stop_cache:
     raise HTTPException(detail="The end location provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
-  if payload.time or payload.price <= 0.0:
+  if payload.time <= 0.0 or payload.price <= 0.0:
     raise HTTPException(detail="The price or time provided cannot be 0 or less", status_code=status.HTTP_400_BAD_REQUEST)
   
   transport_modes = session.exec(select(TransportMode).where(TransportMode.id.in_(payload.transport_mode))).all()
@@ -112,7 +112,7 @@ def flag_route(request: Request, session: SessionDep, current_user: CurrentUser,
   if not route_id_store:
     raise HTTPException(detail="The place you tried flagging does not exist!", status_code=status.HTTP_404_NOT_FOUND)
   
-  flag = FlagStop(flagged_by=current_user.id, reason=reason, stop_id=route_id_store)
+  flag = FlagRoute(flagged_by=current_user.id, reason=reason, route_id=route_id_store)
   session.add(flag)
   session.commit()
 

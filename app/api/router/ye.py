@@ -12,7 +12,7 @@ router = APIRouter(prefix='/ye', tags=["ye"])
 @limiter.limit("5/minute")
 def get_stops(request: Request, session: SessionDep, stop_id: uuid.UUID | None=None, country: uuid.UUID|None=None, city: uuid.UUID|None=None, offset: int=0, limit: int = Query(default=100, le=100)):
   """Get the stops in the database"""
-  query = select(Stops)
+  query = select(Stops).where(Stops.is_active == True)
   if stop_id:
     query = query.where(Stops.id == stop_id)
   if country:

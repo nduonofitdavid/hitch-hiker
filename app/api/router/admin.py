@@ -16,18 +16,18 @@ router = APIRouter(prefix='/admin', tags=['admin', 'admin_user'])
 @limiter.limit("10/minute")
 def add_stop(request: Request, session: SessionDep, admin_user: AdminDep, payload: StopsIn):
   """Create a Stop (Bus stop, car park, train station, etc.)"""
-  if not loader.check_city(payload.city):
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The city provided was not found")
-  if not loader.check_country(payload.country):
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="The country provided was not found")
+  country = loader.get_country(payload.country)
+  city = loader.get_city(payload.city)
+  if city == None or country == None: 
+    raise HTTPException(detail="city or country was not found, check data properly", status_code=status.HTTP_404_NOT_FOUND)
 
   try:
-    stop = Stops(name=payload.name, latitude=payload.latitude, longitude=payload.longitude, city=city.id, country=country.id)
+    stop = Stops(name=payload.name, latitude=payload.latitude, longitude=payload.longitude, city=payload.city, country=payload.city)
     record = Records(
       action=AdminAction.CREATED, 
       performed_by=admin_user.id, 
       performed_at=get_datetime_utc(), 
-      message=f"created stop for {payload.name} at {city.name}, {country.name}"
+      message=f"created stop for {payload.name} at {city[1]}, {country[1]}"
     )
     session.add(stop)
     session.add(record)
@@ -46,10 +46,10 @@ def add_stop(request: Request, session: SessionDep, admin_user: AdminDep, payloa
 @limiter.limit("10/minute")
 def update_stop(request: Request, session: SessionDep, stop_id: uuid.UUID, payload: StopsIn, admin_user: AdminDep):
   """Update a stop"""
-  if not loader.check_city(payload.city):
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The city provided is invalid!")
-  if not loader.check_country(payload.country):
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The country provided is invalid!")
+  country = loader.get_country(payload.country)
+  city = loader.get_city(payload.city)
+  if city == None or country == None: 
+    raise HTTPException(detail="city or country was not found, check data properly", status_code=status.HTTP_404_NOT_FOUND)
   
   stop = session.exec(select(Stops).where(Stops.id == stop_id)).first()
   if not stop:
@@ -72,7 +72,7 @@ def update_stop(request: Request, session: SessionDep, stop_id: uuid.UUID, paylo
     if isinstance(e, IntegrityError):
       raise HTTPException(status_code=409, detail="A conflict occurred while updating the data!")
     raise HTTPException(status_code=500, detail="An unexpected error occurred while updating the stop.")
-
+  refresh_sage_graph(session=session, loader=loader, graph=SG)
   return stop
 
 # routes
@@ -145,7 +145,7 @@ def update_route(request: Request, session: SessionDep, route_id: uuid.UUID, pay
   route.end = payload.end
   route.time = payload.time
   route.price = payload.price
-  route.transport_mode = transport_modes
+  route.transport_modes = transport_modes
 
   record = Records(
     action=AdminAction.EDITED,
@@ -158,6 +158,7 @@ def update_route(request: Request, session: SessionDep, route_id: uuid.UUID, pay
   session.commit()
   session.refresh(route)
 
+  refresh_sage_graph(session=session, loader=loader, graph=SG)
   return route
 
 # trip

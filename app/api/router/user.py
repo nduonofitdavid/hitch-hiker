@@ -31,5 +31,5 @@ def get_user_stats(request: Request, session: SessionDep, user: CurrentUser):
   """Get stats about a user, like distance covered, most visited city, etc."""
   stats = session.exec(select(UserStats).where(UserStats.user_id == user.id)).first()
   if not stats:
-    return {"no_of_trips": 0, "distance_covered": 0, "total_spent": 0, "average_time": 0}
-  return stats
+    return {"no_of_trips": 0, "distance_covered": 0, "total_spent": 0, "total_journey_time": 0, "average_journey_time": 0}
+  return {"no_of+trips": stats.no_of_trips, "distance_covered": stats.distance_covered, "total_spent": stats.total_spent, "total_time": stats.total_time, "average_time": stats.total_time / stats.no_of_trips}

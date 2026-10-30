@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 from app.core.config import settings
 from app.core import security
 from app.core.rlimiter import limiter
-from app.models import Token, UserPublic, Message, UserUpdate, NewPassword, UserCreate
+from app.models import Token, UserPublic, Message, UserUpdate, NewPassword, UserRegister, UserCreate
 from app.api.deps import SessionDep, CurrentUser, get_current_superuser
 from app import crud
 from app.utils import generate_password_reset_token, generate_reset_password_email, send_email, verify_password_reset_token, generate_new_account_email
@@ -17,12 +17,12 @@ router = APIRouter(prefix="/auth", tags=["auth", "authentication"])
 
 @router.post("/sign-up", response_model=UserPublic)
 @limiter.limit("5/minute")
-def create_user(request: Request, session: SessionDep, payload: UserCreate):
+def create_user(request: Request, session: SessionDep, payload: UserRegister):
   """Create account"""
   user = crud.get_user_by_email(session=session, email=payload.email)
   if user:
     raise HTTPException(detail="An account already exists with this email!", status_code=status.HTTP_400_BAD_REQUEST)
-  user = crud.create_user(session=session, user_create=payload)
+  user = crud.create_user(session=session, user_create=UserCreate(email=payload.email, full_name=payload.full_name, password=payload.password))
   
   if settings.emails_enabled and payload.email:
     email_data = generate_new_account_email(email_to=payload.email, username=payload.email, password=payload.password)

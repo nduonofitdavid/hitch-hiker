@@ -13,7 +13,7 @@ def get_datetime_utc() -> datetime:
 class UserBase(SQLModel):
   email: EmailStr = Field(unique=True, index=True, max_length=255)
   is_active: bool = True
-  is_superuser: bool = True
+  is_superuser: bool = False
   full_name: str | None = Field(default=None, max_length=255)
 
 class UserCreate(UserBase):
@@ -230,12 +230,13 @@ class UserStats(SQLModel, table=True):
   no_of_trips: int
   distance_covered: float
   total_spent: float
-  average_time: float
+  total_time: float
 
 class UserStatsOut(SQLModel):
   no_of_trips: int
   distance_covered: float
   total_spent: float
+  total_time: float
   average_time: float
 
 # contributor
