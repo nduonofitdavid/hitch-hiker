@@ -6,7 +6,7 @@ from sqlmodel import select
 
 from app.api.deps import SessionDep, CurrentUser
 from app.api.lib.sage_engine import loader
-from app.models import Place, PlaceInUser, Contributor, PlaceType, ContributorRecord, ContributionStatus, ContributorAction, FlagPlace, get_datetime_utc, StopsIn, Stops, PlaceInUser, ContributorPlaceUpdate, RouteIn, Route, TransportMode, FlagStop, FlagRoute
+from app.models import Place, PlaceInUser, Contributor, PlaceType, ContributorRecord, ContributionStatus, ContributorAction, FlagPlace, get_datetime_utc, StopsIn, Stops, PlaceInUser, RouteIn, Route, TransportMode, FlagStop, FlagRoute, PendingPlace
 from app.core.rlimiter import limiter
 from app.core.config import settings
 from app.utils import generate_new_contributor_email, send_email
@@ -144,7 +144,7 @@ def add_place(request: Request, session: SessionDep, current_user: CurrentUser, 
     if not place_type: 
       raise HTTPException(detail="The place type provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
     
-  place = Place(name=payload.name, description=payload.description, is_active=False, place_type=payload.place_type, latitude=payload.latitude, longitude=payload.longitude, city=payload.city, country=payload.country)
+  place = Place(name=payload.name, description=payload.description, is_active=False, place_type=payload.place_type, created_by=current_user.id, latitude=payload.latitude, longitude=payload.longitude, city=payload.city, country=payload.country)
 
   record = ContributorRecord(contributor_id=contributor.id, action_type=ContributorAction.CREATE, contribution_status=ContributionStatus.PENDING, description=f"Created place with named {payload.name}, with coordinates {payload.latitude}, {payload.longitude}")
   session.add(place)
@@ -163,9 +163,16 @@ def add_place(request: Request, session: SessionDep, current_user: CurrentUser, 
 
 @router.put("/place/update/{place_id}", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
-def update_place(request: Request, session: SessionDep, current_user: CurrentUser, place_id: uuid.UUID, payload: ContributorPlaceUpdate):
+def update_place(request: Request, session: SessionDep, current_user: CurrentUser, place_id: uuid.UUID, payload: PlaceInUser):
   """update a place"""
   contributor = validate_contributor(session=session, user_id=current_user.id)
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
+  if country == None or city == None:
+    raise HTTPException(detail="The city or country provided is not valid, check again", status_code=status.HTTP_400_BAD_REQUEST)
+  
+  del country
+  del city
 
   if payload.place_type:
     place_type = retrieve_place_type(session=session, place_t_id=payload.place_type)
@@ -176,21 +183,18 @@ def update_place(request: Request, session: SessionDep, current_user: CurrentUse
   if not place:
     raise HTTPException(detail="The place you tried updating does not exist", status_code=status.HTTP_404_NOT_FOUND)
 
-  if not current_user.is_superuser:
-    if not place.created_by == current_user.id:
-      raise HTTPException(detail="You can only update a place that was created by you, flag it instead", status_code=status.HTTP_403_FORBIDDEN)
+  if not place.created_by == current_user.id:
+    raise HTTPException(detail="You can only update a place that was created by you, flag it instead", status_code=status.HTTP_403_FORBIDDEN)
 
-  place.name=payload.name
-  place.place_type=payload.place_type
-  place.description=payload.description
+  new_place = PendingPlace(place_id=place.id, name=payload.name, place_type=payload.place_type, latitude=payload.latitude, longitude=payload.longitude, country=payload.country, city=payload.country, description=payload.description)
 
-  record = ContributorRecord(contributor_id=contributor.id, action_type=ContributorAction.UPDATE, contribution_status=ContributionStatus.PENDING, description=f"Updated place with named {payload.name}")
-  session.add(place)
+  record = ContributorRecord(contributor_id=contributor.id, action_type=ContributorAction.UPDATE, contribution_status=ContributionStatus.PENDING, description=f"Updated place with named {place.name}")
+  session.add(new_place)
   session.add(record)
   session.commit()
-  session.refresh(place)
+  session.refresh(new_place)
 
-  return place
+  return new_place
 
 @router.post('/place/flag/{place_id}', status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")

@@ -23,7 +23,7 @@ def add_stop(request: Request, session: SessionDep, admin_user: AdminDep, payloa
     raise HTTPException(detail="city or country was not found, check data properly", status_code=status.HTTP_404_NOT_FOUND)
 
   try:
-    stop = Stops(name=payload.name, latitude=payload.latitude, longitude=payload.longitude, city=payload.city, country=payload.city)
+    stop = Stops(name=payload.name, latitude=payload.latitude, longitude=payload.longitude, city=payload.city, country=payload.country)
     record = Records(
       action=AdminAction.CREATED, 
       performed_by=admin_user.id, 

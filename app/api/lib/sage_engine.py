@@ -17,8 +17,6 @@ class Loader:
     self.stop_cache: dict[uuid.UUID, CachedStop] = {}
     self._route_cache = defaultdict(list)
     self._edge_lookup: dict[tuple[uuid.UUID, uuid.UUID], CachedRoute] = {}
-    self._country_hash: dict = {}
-    self._city_hash: dict = {}
     self._route_geometry_cache: dict[tuple[uuid.UUID, uuid.UUID], tuple[list[tuple[float, float]], float]] = {}
 
   def load_stops(self, session: Session, use_cache: bool=True):
@@ -31,33 +29,13 @@ class Loader:
     
     self.stop_cache = new_stop_cache
     return self.stop_cache
-
-  def load_countries(self, session: Session, use_cache: bool=True):
-    if use_cache and self._country_hash:
-      return self._country_hash
-    countries = session.exec(select(Country.id, Country.name)).all()
-    self._country_hash = {id: name for id, name in countries}
-    return self._country_hash
-
-  def load_cities(self, session: Session, use_cache: bool=True):
-    if use_cache and self._city_hash:
-      return self._city_hash
-    cities = session.exec(select(City.id, City.name)).all()
-    self._city_hash = {id: name for id, name in cities}
-    return self._city_hash
-
-  def get_city(self, city_id: uuid.UUID) -> tuple[uuid.UUID, str] | None:
-    return self._city_hash[city_id] if city_id in self._city_hash else None
-  
-  def get_country(self, country_id: uuid.UUID) -> tuple[uuid.UUID, str] | None:
-    return self._country_hash[country_id] if country_id in self._country_hash else None
   
   def load_routes(self, session: Session, use_cache: bool=True):
     if use_cache and self._route_cache:
       return self._route_cache
 
     routes = session.exec(select(Route).where(Route.is_active == True).options(selectinload(Route.transport_modes))).all()
-    new_route_cache = {}
+    new_route_cache = defaultdict(list)
     new_edge_lookup = {}
     
     for route in routes:
@@ -102,8 +80,6 @@ class Loader:
     """Refresh the cached data"""
     self.load_stops(session=session, use_cache=False)
     self.load_routes(session=session, use_cache=False)
-    self.load_cities(session=session, use_cache=False)
-    self.load_countries(session=session, use_cache=False)
     self.load_route_geometry(session=session)
 
 def init_loader(loader: Loader) -> None:
@@ -111,8 +87,6 @@ def init_loader(loader: Loader) -> None:
   with Session(engine) as session:
     loader.load_stops(session=session, use_cache=False)
     loader.load_routes(session=session, use_cache=False)
-    loader.load_cities(session=session, use_cache=False)
-    loader.load_countries(session=session, use_cache=False)
     loader.load_route_geometry(session=session)
 
 loader = Loader()
@@ -120,7 +94,7 @@ init_loader(loader)
 
 class SageGraph:
   """This graph works on the knowledge tree"""
-  def __init__(self, vertices: dict[uuid.UUID, Stops], edges: dict[uuid.UUID, list[Route]]) -> None:
+  def __init__(self, vertices: dict[uuid.UUID, CachedStop], edges: dict[uuid.UUID, list[CachedRoute]]) -> None:
     self.vertices = vertices
     self.edges = edges
 
@@ -130,10 +104,10 @@ class SageGraph:
   def get_edges(self):
     return self.edges
 
-  def update_edges(self, edges: dict[uuid.UUID, list[Route]]):
+  def update_edges(self, edges: dict[uuid.UUID, list[CachedRoute]]):
     self.edges = edges
 
-  def update_vertices(self, vertices: dict[uuid.UUID, Stops]):
+  def update_vertices(self, vertices: dict[uuid.UUID, CachedStop]):
     self.vertices = vertices
 
   def _dijkstra_rev_path(self, start: uuid.UUID, previous: dict[uuid.UUID, uuid.UUID], destination: uuid.UUID):
@@ -193,8 +167,8 @@ def find_nearest(payload: TripIn):
   best_start_distance = float("inf")
   best_stop_distance  = float("inf")
 
-  best_start_stop: uuid.UUID = None
-  best_stop_stop: uuid.UUID = None
+  best_start_stop: uuid.UUID | None = None
+  best_stop_stop: uuid.UUID | None = None
 
   stops = loader.stop_cache.values()
   if not stops:

@@ -116,7 +116,7 @@ def mark_complete(request: Request, session: SessionDep, trip_id: uuid.UUID, use
   session.add(trip)
   user_stats = session.exec(select(UserStats).where(UserStats.user_id == user.id)).first()
   if not user_stats:
-    user_stats = UserStats(user_id=user.id, no_of_trips=1, distance_covered=trip.distance, total_spent=trip.price, average_time=trip.time)
+    user_stats = UserStats(user_id=user.id, no_of_trips=1, distance_covered=trip.distance, total_spent=trip.price, total_time=trip.time)
   else:
     user_stats.no_of_trips+=1
     user_stats.distance_covered+=trip.distance

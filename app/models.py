@@ -229,8 +229,8 @@ class UserStats(SQLModel, table=True):
   user_id: uuid.UUID = Field(foreign_key="user.id", index=True, unique=True)
   no_of_trips: int
   distance_covered: float
-  total_spent: float
-  total_time: float
+  total_spent: float 
+  total_time: float = Field(default=0.0)
 
 class UserStatsOut(SQLModel):
   no_of_trips: int
@@ -293,11 +293,6 @@ class FlagRoute(SQLModel, table=True):
   status: FlagStatus = Field(default=FlagStatus.PENDING)
   date_flagged: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
 
-class ContributorPlaceUpdate(SQLModel):
-  name: str = Field(max_length=128)
-  place_type: uuid.UUID
-  description: str = Field(min_length=15, max_length=128)
-
 # places
 class PlaceType(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -334,6 +329,13 @@ class Place(PlaceInAdmin, table=True):
       name="Unique place constraint"
     ),
   )
+
+class PendingPlace(PlaceInUser, table=True):
+  id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
+  place_id: uuid.UUID = Field(foreign_key="place.id", index=True)
+  city: uuid.UUID = Field(foreign_key="city.id", index=True)
+  country: uuid.UUID = Field(foreign_key="country.id", index=True)
+  place_type: uuid.UUID | None = Field(default=None, foreign_key="placetype.id", index=True)
 
 # auth
 class Token(SQLModel):
