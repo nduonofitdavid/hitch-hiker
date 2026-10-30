@@ -91,7 +91,7 @@ def get_routes(request: Request, session: SessionDep, route_id: uuid.UUID|None =
   if end_id:
     query = query.where(Route.end == end_id)
   if transport_modes:
-    transport_modes_store = session.exec(select(TransportMode).where(TransportMode.id._in(transport_modes))).all()
+    transport_modes_store = session.exec(select(TransportMode).where(TransportMode.id.in_(transport_modes))).all()
     query = query.where(Route.transport_modes.in_(transport_modes_store))
   
   routes = session.exec(query.offset(offset).limit(limit)).all()

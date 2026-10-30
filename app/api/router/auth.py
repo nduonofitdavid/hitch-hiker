@@ -90,4 +90,4 @@ def recover_password_html_content(request: Request, session: SessionDep, email: 
 
   password_reset_token = generate_password_reset_token(email=email)
   email_data = generate_reset_password_email(email_to=user.email, email=email, token=password_reset_token)
-  return HTMLResponse(content=email_data.html_content, headers={"subject:": email_data.subject})
+  return HTMLResponse(content=email_data.html_content, headers={"subject": email_data.subject})

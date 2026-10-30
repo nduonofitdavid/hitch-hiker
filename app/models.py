@@ -242,7 +242,7 @@ class UserStatsOut(SQLModel):
 # contributor
 class Contributor(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
-  user_id: uuid.UUID = Field(foreign_key="user.id", index=True)
+  user_id: uuid.UUID = Field(foreign_key="user.id", unique=True, index=True)
   is_enabled: bool = False
   date_joined: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
   approved_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
@@ -345,4 +345,4 @@ class TokenPayload(SQLModel):
 
 class NewPassword(SQLModel):
   token: str
-  new_password: str = Field(min_items=8, max_length=128)
+  new_password: str = Field(min_length=8, max_length=128)

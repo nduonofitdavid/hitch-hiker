@@ -9,6 +9,7 @@ def format_document(dir: str):
   """Format html documents into a single line"""
   for entry in os.scandir(dir):
     if entry.is_file():
+      if not entry.name[-4:] == "html": continue
       with open(entry.path) as file:
         html = file.read()
       one_line = minify(html, remove_comments=True, reduce_empty_attributes=True, remove_optional_attribute_quotes=True, keep_pre=False)
