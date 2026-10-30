@@ -224,6 +224,16 @@ class TripStore(SQLModel, table=True):
   trip_status: TripStatus = Field(default=TripStatus.PENDING)
   carried_out_at: datetime = Field(default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)) # type: ignore
 
+  __table_args__ = (
+    UniqueConstraint(
+      "id",
+      "user_id",
+      "trip_status",
+      "carried_out_at",
+      name="enforce trip uniqueness"
+    ),
+  )
+
 class UserStats(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
   user_id: uuid.UUID = Field(foreign_key="user.id", index=True, unique=True)

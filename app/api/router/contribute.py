@@ -186,7 +186,7 @@ def update_place(request: Request, session: SessionDep, current_user: CurrentUse
   if not place.created_by == current_user.id:
     raise HTTPException(detail="You can only update a place that was created by you, flag it instead", status_code=status.HTTP_403_FORBIDDEN)
 
-  new_place = PendingPlace(place_id=place.id, name=payload.name, place_type=payload.place_type, latitude=payload.latitude, longitude=payload.longitude, country=payload.country, city=payload.country, description=payload.description)
+  new_place = PendingPlace(place_id=place.id, name=payload.name, place_type=payload.place_type, latitude=payload.latitude, longitude=payload.longitude, country=payload.country, city=payload.city, description=payload.description)
 
   record = ContributorRecord(contributor_id=contributor.id, action_type=ContributorAction.UPDATE, contribution_status=ContributionStatus.PENDING, description=f"Updated place with named {place.name}")
   session.add(new_place)

@@ -1,8 +1,10 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from sqlmodel import select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import SessionDep, CurrentUser
 from app.models import TripIn, OptimizerWeight, TripOut, TripStore, TripStatus, UserStats, RouteBlock, RouteTripOut
@@ -124,5 +126,12 @@ def mark_complete(request: Request, session: SessionDep, trip_id: uuid.UUID, use
     user_stats.total_time+=trip.time
   
   session.add(user_stats)
-  session.commit()
+  try:
+    session.commit()
+  except Exception as e:
+    session.rollback()
+    logging.error(f"conflict occured when updating trip")
+    if isinstance(e, IntegrityError):
+      raise HTTPException(detail="This trip has already been completed", status_code=status.HTTP_409_CONFLICT)
+    raise HTTPException(detail="Sorry an unexpected error occured!", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
   return JSONResponse(content={"message": "success"}, status_code=status.HTTP_200_OK)

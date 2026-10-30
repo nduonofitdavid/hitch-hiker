@@ -81,7 +81,7 @@ def update_stop(request: Request, session: SessionDep, stop_id: uuid.UUID, paylo
 # routes
 @router.get("/routes", dependencies=[Depends(get_current_superuser)])
 @limiter.limit("10/minute")
-def get_routes(request: Request, session: SessionDep, route_id: uuid.UUID|None = None, start_id: uuid.UUID|None=None, end_id: uuid.UUID|None=None, transport_modes: list[uuid.UUID]|None=None, offset: int=0, limit: int = Query(default=100, le=100)):
+def get_routes(request: Request, session: SessionDep, route_id: uuid.UUID|None = None, start_id: uuid.UUID|None=None, end_id: uuid.UUID|None=None, transport_modes: list[uuid.UUID]|None=Query(default=None), offset: int=0, limit: int = Query(default=100, le=100)):
   """Get the routes in the database"""
   query = select(Route)
   if route_id:
@@ -91,8 +91,7 @@ def get_routes(request: Request, session: SessionDep, route_id: uuid.UUID|None =
   if end_id:
     query = query.where(Route.end == end_id)
   if transport_modes:
-    transport_modes_store = session.exec(select(TransportMode).where(TransportMode.id.in_(transport_modes))).all()
-    query = query.where(Route.transport_modes.in_(transport_modes_store))
+    query = query.where(Route.transport_modes.any(TransportMode.id.in_(transport_modes)))
   
   routes = session.exec(query.offset(offset).limit(limit)).all()
   return routes
@@ -196,7 +195,7 @@ def get_records(request: Request, session: SessionDep, record_id: uuid.UUID | No
   query = select(Records)
   if record_id:
     query = query.where(Records.id == record_id)
-  if action:
+  if action is not None:
     query = query.where(Records.action == action)
   if performed_by:
     query = query.where(Records.performed_by == performed_by)
