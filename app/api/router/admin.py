@@ -5,9 +5,10 @@ from fastapi import APIRouter, HTTPException, status, Query, Request
 from sqlmodel import select, or_
 from sqlalchemy.exc import IntegrityError
 from app.api.deps import SessionDep, AdminDep, Depends, get_current_superuser
-from app.models import Country, City, StopsIn, Stops, get_datetime_utc, Records, AdminAction, Route, RouteIn, TransportMode, CityBase, TripStore, PlaceInAdmin, Place
+from app.models import Country, City, StopsIn, Stops, get_datetime_utc, Records, AdminAction, Route, RouteIn, TransportMode, CityBase, TripStore, PlaceInAdmin, Place, PlaceType
 from app.api.lib.sage_engine import refresh_sage_graph, SG, loader
 from app.core.rlimiter import limiter
+from app.crud import retrieve_city, retrieve_country, retrieve_place_type
 
 router = APIRouter(prefix='/admin', tags=['admin', 'admin_user'])
 
@@ -16,8 +17,8 @@ router = APIRouter(prefix='/admin', tags=['admin', 'admin_user'])
 @limiter.limit("10/minute")
 def add_stop(request: Request, session: SessionDep, admin_user: AdminDep, payload: StopsIn):
   """Create a Stop (Bus stop, car park, train station, etc.)"""
-  country = loader.get_country(payload.country)
-  city = loader.get_city(payload.city)
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
   if city == None or country == None: 
     raise HTTPException(detail="city or country was not found, check data properly", status_code=status.HTTP_404_NOT_FOUND)
 
@@ -27,7 +28,7 @@ def add_stop(request: Request, session: SessionDep, admin_user: AdminDep, payloa
       action=AdminAction.CREATED, 
       performed_by=admin_user.id, 
       performed_at=get_datetime_utc(), 
-      message=f"created stop for {payload.name} at {city[1]}, {country[1]}"
+      message=f"created stop for {payload.name} at {city.name}, {country.name}"
     )
     session.add(stop)
     session.add(record)
@@ -40,14 +41,15 @@ def add_stop(request: Request, session: SessionDep, admin_user: AdminDep, payloa
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sorry, an unexpected error occured")    
 
   refresh_sage_graph(session=session, loader=loader, graph=SG)
+  session.refresh(stop)
   return stop
 
 @router.put("/stops/update/{stop_id}", status_code=status.HTTP_200_OK)
 @limiter.limit("10/minute")
 def update_stop(request: Request, session: SessionDep, stop_id: uuid.UUID, payload: StopsIn, admin_user: AdminDep):
   """Update a stop"""
-  country = loader.get_country(payload.country)
-  city = loader.get_city(payload.city)
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
   if city == None or country == None: 
     raise HTTPException(detail="city or country was not found, check data properly", status_code=status.HTTP_404_NOT_FOUND)
   
@@ -73,6 +75,7 @@ def update_stop(request: Request, session: SessionDep, stop_id: uuid.UUID, paylo
       raise HTTPException(status_code=409, detail="A conflict occurred while updating the data!")
     raise HTTPException(status_code=500, detail="An unexpected error occurred while updating the stop.")
   refresh_sage_graph(session=session, loader=loader, graph=SG)
+  session.refresh(stop)
   return stop
 
 # routes
@@ -127,6 +130,7 @@ def add_route(request: Request, session: SessionDep, admin_user: AdminDep, paylo
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sorry, an unexpected error occured")    
   
   refresh_sage_graph(session=session, loader=loader, graph=SG)
+  session.refresh(route)
   return route
 
 @router.put("/routes/update/{route_id}", status_code=status.HTTP_200_OK)
@@ -159,6 +163,7 @@ def update_route(request: Request, session: SessionDep, route_id: uuid.UUID, pay
   session.refresh(route)
 
   refresh_sage_graph(session=session, loader=loader, graph=SG)
+  session.refresh(route)
   return route
 
 # trip
@@ -218,6 +223,7 @@ def add_country(request: Request, session: SessionDep, admin_user: AdminDep, nam
   session.refresh(country)
 
   refresh_sage_graph(session=session, loader=loader, graph=SG)
+  session.refresh(country)
   return country
 
 @router.put("/country/update/{country_id}", status_code=status.HTTP_200_OK)
@@ -249,10 +255,11 @@ def update_country(request: Request, session: SessionDep, admin_user: AdminDep, 
 @limiter.limit("10/minute")
 def add_city(request: Request, session: SessionDep, admin_user: AdminDep, payload: CityBase):
   """Add a city"""
-  if not loader.check_country(payload.country):
-    raise HTTPException(detail="The country provided is not valid!", status_code=status.HTTP_400_BAD_REQUEST)
+  country = session.exec(select(Country.id).where(Country.id == payload.country)).first()
+  if not country:
+    raise HTTPException(detail="The country you provided for was not found", status_code=status.HTTP_400_BAD_REQUEST)
   
-  city = City(name=payload.name, country=payload.country)
+  city = City(name=payload.name, country=country)
   record = Records(action=AdminAction.CREATED, performed_by=admin_user.id, performed_at=get_datetime_utc(), message=f"Created city {payload.name}")
   session.add(city)
   session.add(record)
@@ -262,17 +269,17 @@ def add_city(request: Request, session: SessionDep, admin_user: AdminDep, payloa
     if isinstance(e, IntegrityError):
       raise HTTPException(detail="This city already exists in the system", status_code=status.HTTP_409_CONFLICT)
     raise HTTPException(detail="Sorry an unexpected error occured, try again later!", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+  
   session.refresh(city)
-
-  refresh_sage_graph(session=session, loader=loader, graph=SG)
   return city
 
 @router.put("/city/update/{city_id}")
 @limiter.limit("10/minute")
 def edit_city(request: Request, session: SessionDep, admin_user: AdminDep, city_id: uuid.UUID, payload: CityBase):
-  if not loader.check_country(payload.country):
-    raise HTTPException(detail="The country provided does not exist!", status_code=status.HTTP_400_BAD_REQUEST)
-  city = session.exec(select(City).where(City.id == city_id)).first()
+  country = retrieve_country(session=session, country_id=payload.country)
+  if not country:
+    raise HTTPException(detail="The country provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
+  city = retrieve_city(session=session, city_id=city_id)
   if not city:
     raise HTTPException(detail="The city does not exist!", status_code=status.HTTP_404_NOT_FOUND)
   city.name = payload.name
@@ -297,12 +304,15 @@ def edit_city(request: Request, session: SessionDep, admin_user: AdminDep, city_
 @limiter.limit("10/minute")
 def add_place(request: Request, session: SessionDep, admin_user: AdminDep, payload: PlaceInAdmin):
   """Create a place"""
-  if not loader.check_country(payload.country):
-    raise HTTPException(detail="The country provided does not exist!", status_code=status.HTTP_400_BAD_REQUEST)
-  if not loader.check_city(payload.city):
-    raise HTTPException(detail="The city provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
+  if city == None or country == None:
+    raise HTTPException(detail="The country or city provided was not found, check them again", status_code=status.HTTP_400_BAD_REQUEST)
+  place_type = session.exec(select(PlaceType.id).where(PlaceType.id == payload.place_type)).first()
+  if not place_type:
+    raise HTTPException(detail="The place type provided was not found", status_code=status.HTTP_400_BAD_REQUEST)
 
-  place = Place(name=payload.name, latitude=payload.latitude, longitude=payload.longitude, is_active=payload.is_active, description=payload.description, city=payload.city, country=payload.country)
+  place = Place(name=payload.name, latitude=payload.latitude, place_type=place_type, longitude=payload.longitude, is_active=payload.is_active, description=payload.description, city=payload.city, country=payload.country)
   record = Records(action=AdminAction.CREATED, performed_by=admin_user.id, message=f"Created place {payload.name}")
   try:
     session.add(place)
@@ -338,11 +348,14 @@ def toggle_place_activeness(request: Request, session: SessionDep, admin_user: A
 @limiter.limit("10/minute")
 def update_place(request: Request, session: SessionDep, admin_user: AdminDep, place_id: uuid.UUID, payload: PlaceInAdmin):
   """Update a place"""
-  if not loader.check_country(payload.country):
-    raise HTTPException(detail="The country provided does not exist!", status_code=status.HTTP_400_BAD_REQUEST)
-  if not loader.check_city(payload.city):
-    raise HTTPException(detail="The city provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
-  
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
+  if city == None or country == None:
+    raise HTTPException(detail="The country or city provided was not found, check them again", status_code=status.HTTP_400_BAD_REQUEST)
+  place_type = retrieve_place_type(session=session, place_t_id=payload.place_type)
+  if not place_type:
+    raise HTTPException(detail="You supplied an invalid place type", status_code=status.HTTP_400_BAD_REQUEST)
+
   place = session.exec(select(Place).where(Place.id == place_id)).first()
   if not place:
     raise HTTPException(detail="The place you tried updating was not found!", status_code=status.HTTP_404_NOT_FOUND)
@@ -351,6 +364,7 @@ def update_place(request: Request, session: SessionDep, admin_user: AdminDep, pl
   place.latitude = payload.latitude
   place.longitude = payload.longitude
   place.is_active = payload.is_active
+  place.place_type = place_type.id
   place.description = payload.description
   place.city = payload.city
   place.country = payload.country

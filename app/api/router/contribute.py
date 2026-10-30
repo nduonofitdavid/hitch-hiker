@@ -10,6 +10,7 @@ from app.models import Place, PlaceInUser, Contributor, PlaceType, ContributorRe
 from app.core.rlimiter import limiter
 from app.core.config import settings
 from app.utils import generate_new_contributor_email, send_email
+from app.crud import retrieve_place_type, retrieve_city, retrieve_country
 
 router = APIRouter(prefix='/contribute', tags=['contributor', 'contribute'])
 
@@ -33,11 +34,13 @@ def register_contributor(request: Request, session: SessionDep, current_user: Cu
   contributor = Contributor(user_id=current_user.id, date_joined=get_datetime_utc())
   session.add(contributor)
   session.commit()
+  session.refresh(contributor)
 
   if settings.emails_enabled and current_user.email:
     email_data = generate_new_contributor_email(email_to=current_user.email, username=current_user.email)
     send_email(email_to=current_user.email, subject=email_data.subject, html_content=email_data.html_content)
   
+  session.refresh(contributor)
   return contributor
 
 # contribute a stop
@@ -47,7 +50,9 @@ def add_stop(request: Request, session: SessionDep, current_user: CurrentUser, p
   """add a stop"""
   contributor = validate_contributor(session=session, user_id=current_user.id)
 
-  if not loader.check_city(payload.city) or not loader.check_country(payload.country):
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
+  if city == None or country == None:
     raise HTTPException(detail="Ensure the country and city provided exist", status_code=status.HTTP_400_BAD_REQUEST)
 
   stop = Stops(name=payload.name, latitude=payload.latitude, longitude=payload.longitude, is_active=False, city=payload.city, country=payload.country, contributed_by=current_user.id)
@@ -62,8 +67,9 @@ def add_stop(request: Request, session: SessionDep, current_user: CurrentUser, p
     if isinstance(e, IntegrityError):
       raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Sorry, this stop already exist, check the details properly!")
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sorry, an unexpected error occured!")
-
-  return {"detail": "stop added, pending admin approval", "stop": stop}  
+  
+  session.refresh(stop)
+  return stop
 
 @router.post("/stop/flag/{stop_id}", status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
@@ -75,6 +81,7 @@ def flag_stop(request: Request, session: SessionDep, current_user: CurrentUser, 
   flag = FlagStop(flagged_by=current_user.id, reason=reason, stop_id=stop_id_store)
   session.add(flag)
   session.commit()
+  session.refresh(flag)
 
   return flag
   
@@ -101,8 +108,9 @@ def add_route(request: Request, session: SessionDep, current_user: CurrentUser, 
   session.add(route)
   session.add(record)
   session.commit()
+  session.refresh(route)
   
-  return {"detail": "Your route has been added, pending admin approval", "route": route}
+  return route
 
 @router.post("/route/flag/{route_id}", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
@@ -115,6 +123,7 @@ def flag_route(request: Request, session: SessionDep, current_user: CurrentUser,
   flag = FlagRoute(flagged_by=current_user.id, reason=reason, route_id=route_id_store)
   session.add(flag)
   session.commit()
+  session.refresh(flag)
 
   return flag
 
@@ -125,8 +134,11 @@ def add_place(request: Request, session: SessionDep, current_user: CurrentUser, 
   """Add a place"""
   contributor = validate_contributor(session=session, user_id=current_user.id)
 
-  if not loader.check_city(payload.city) or not loader.check_country(payload.country):
+  country = retrieve_country(session=session, country_id=payload.country)
+  city = retrieve_city(session=session, city_id=payload.city)
+  if country == None or city == None:
     raise HTTPException(detail="Ensure the country and city provided exist", status_code=status.HTTP_400_BAD_REQUEST)
+  
   if payload.place_type:
     place_type = session.exec(select(PlaceType).where(PlaceType.id == payload.place_type)).first()
     if not place_type: 
@@ -146,8 +158,8 @@ def add_place(request: Request, session: SessionDep, current_user: CurrentUser, 
     if isinstance(e, IntegrityError):
       raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Sorry, this place already exist, check the details properly!")
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sorry, an unexpected error occured!")
-
-  return {"detail": "The place has been added, pending admin approval", "place": place}
+  session.refresh(place)
+  return place
 
 @router.put("/place/update/{place_id}", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
@@ -156,7 +168,7 @@ def update_place(request: Request, session: SessionDep, current_user: CurrentUse
   contributor = validate_contributor(session=session, user_id=current_user.id)
 
   if payload.place_type:
-    place_type = session.exec(select(PlaceType).where(PlaceType.id == payload.place_type)).first()
+    place_type = retrieve_place_type(session=session, place_t_id=payload.place_type)
     if not place_type: 
       raise HTTPException(detail="The place type provided does not exist", status_code=status.HTTP_400_BAD_REQUEST)
 
@@ -176,6 +188,7 @@ def update_place(request: Request, session: SessionDep, current_user: CurrentUse
   session.add(place)
   session.add(record)
   session.commit()
+  session.refresh(place)
 
   return place
 
@@ -190,5 +203,5 @@ def flag_place(request: Request, session: SessionDep, current_user: CurrentUser,
   flag = FlagPlace(flagged_by=current_user.id, reason=reason, place_id=place)
   session.add(flag)
   session.commit()
-
+  session.refresh(flag)
   return flag

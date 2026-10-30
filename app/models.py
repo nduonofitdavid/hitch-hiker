@@ -136,8 +136,8 @@ class Coordinates(SQLModel):
 class RouteIn(SQLModel):
   start: uuid.UUID
   end: uuid.UUID
-  time: float
-  price: float
+  time: float = Field(gt=1.0)
+  price: float = Field(gt=1.0)
   transport_mode: list[uuid.UUID]
 
 # think about how to sort this stuff in the context of train can be faster than car, and have a different price
@@ -145,8 +145,8 @@ class Route(SQLModel, table=True):
   id: uuid.UUID | None = Field(default_factory=uuid.uuid4, primary_key=True)
   start: uuid.UUID = Field(foreign_key="stops.id")
   end: uuid.UUID = Field(foreign_key="stops.id")
-  time: float
-  price: float
+  time: float = Field(gt=1.0)
+  price: float = Field(gt=1.0)
   is_active: bool = Field(default=True)
   contributed_by: uuid.UUID | None = Field(default=None, foreign_key="user.id", index=True)
   transport_modes: list["TransportMode"] = Relationship(back_populates="routes", link_model=TransportModeRouteLink)

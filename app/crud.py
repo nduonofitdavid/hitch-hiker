@@ -3,7 +3,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 from app.core.security import get_hashed_password, verify_password
-from app.models import User, UserCreate, UserUpdate
+from app.models import User, UserCreate, UserUpdate, City, Country, PlaceType
 
 def create_user(*, session: Session, user_create: UserCreate):
   db_obj = User.model_validate(user_create, update={"hashed_password": get_hashed_password(user_create.password)})
@@ -47,3 +47,15 @@ def update_user(*, session: Session, db_user: User, user_in: UserUpdate) -> Any:
   session.commit()
   session.refresh(db_user)
   return db_user
+
+def retrieve_country(session: Session, country_id: uuid.UUID):
+  country = session.exec(select(Country).where(Country.id == country_id)).first()
+  return country
+
+def retrieve_city(session: Session, city_id: uuid.UUID):
+  city = session.exec(select(City).where(City.id == city_id)).first()
+  return city
+
+def retrieve_place_type(session: Session, place_t_id: uuid.UUID):
+  place_type = session.exec(select(PlaceType).where(PlaceType.id == place_t_id)).first()
+  return place_type
