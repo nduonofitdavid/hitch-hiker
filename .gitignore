@@ -3,3 +3,10 @@
 __pycache__/
 hhiker.bin
 other/
+
+# skip tests for now
+.pytest_cache/
+.coverage
+tests/
+pytest.ini
+.github

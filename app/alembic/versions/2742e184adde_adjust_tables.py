@@ -1,4 +1,4 @@
-"""Adjust tables
+"""Preserve a historical migration revision without changing the schema.
 
 Revision ID: 2742e184adde
 Revises: 7907c7f8a5f8
@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-  """Upgrade schema."""
+  """Advance through this historical revision without changing the schema."""
   pass
 
 
 def downgrade() -> None:
-  """Downgrade schema."""
+  """Reverse this historical revision without changing the schema."""
   pass

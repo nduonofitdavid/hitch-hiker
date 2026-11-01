@@ -1,18 +1,10 @@
 # Hitch Hiker
 
-A Python/FastAPI backend for finding transport routes through an unfamiliar city. It models local stops and connections so a traveller can see where to change transport, which modes to use, and the associated fares and travel times. The current data setup targets Abuja, Nigeria.
-
-## How it works
-
-- **Transport routing:** a graph of stops and directed routes stored in PostgreSQL. The API uses Dijkstra's algorithm to minimize recorded fare or travel time; the engine also includes optional A* support.
-- **Road routing:** a local OpenStreetMap extract is parsed into a NetworkX graph. Coordinates are snapped to road nodes, and road paths provide route geometry and estimated car journeys.
-- **Trip records:** responses contain ordered route segments and a trip ID. Trips can be marked complete and queried alongside user statistics.
-
-The API also includes JWT authentication, password recovery, place lookups, administration endpoints, and contributor submissions and flags.
+A FastAPI backend for planning transport routes, estimating fares and travel times, and saving trips. The current data setup targets Abuja, Nigeria.
 
 ## Setup
 
-Requires Python and PostgreSQL. The repository does not pin a Python version; use one compatible with `requirements.txt`.
+Requires Python 3.11 or 3.12, PostgreSQL, and Linux.
 
 ```sh
 git clone https://github.com/nduonofitdavid/hitch-hiker.git
@@ -22,60 +14,47 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Create `app/.env` with these required settings:
+Create a PostgreSQL database and add `app/.env`, replacing the placeholder credentials and paths:
 
-| Purpose | Settings |
-| --- | --- |
-| Application | `PROJECT_NAME`, `SECRET_KEY` |
-| PostgreSQL connection | `DATABASE_URL`, e.g. `postgresql+psycopg://user:password@localhost/hitch_hiker` |
-| Initial administrator | `FIRST_SUPERUSER`, `FIRST_SUPERUSER_PASSWORD` |
-| Routing and fare estimates | `OPTIMISTIC_SPEED`, `STANDARD_PRICE`, `BASE_PRICE` |
-| Road types and weights | `ROUTABLE`, `ROAD_PENALTY` |
-| Supabase Storage | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `BUCKET_STR` |
+```dotenv
+PROJECT_NAME="Hitch Hiker"
+SECRET_KEY=replace-with-a-random-secret
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/hitch_hiker
+FIRST_SUPERUSER=admin@example.com
+FIRST_SUPERUSER_PASSWORD=replace-with-a-strong-password
+OPTIMISTIC_SPEED=40
+STANDARD_PRICE=100
+BASE_PRICE=200
+ROUTABLE=["primary", "residential"]
+ROAD_PENALTY={"primary": 1.0, "residential": 1.2}
+OSM_DATA_PATH=/absolute/path/to/abuja.osm.pbf
+```
 
-`ROUTABLE` and `ROAD_PENALTY` are Python-literal strings, for example `{'primary', 'residential'}` and `{'primary': 1.0, 'residential': 1.2}`. Include a penalty for each configured road type.
+Supply a local OpenStreetMap `.osm.pbf` extract at `OSM_DATA_PATH`. Speed is in km/h; `STANDARD_PRICE` is the minimum positive fare and `BASE_PRICE` the fare per started 100 metres, in NGN. Adjust these values for your data.
 
-For automatic downloads, the storage bucket must contain `abuja.osm.pbf`, `data.json` (stops), and `route.json` (routes). Missing files download when configuration loads, normally into `/tmp/hhiker/`. To use existing local files, set `OSM_DATA_PATH`, `STOPS_PATH`, and `ROUTES_PATH`; the Supabase settings remain required. SMTP settings and `EMAILS_FROM_EMAIL` enable email delivery.
-
-Create the database, then run migrations and initialize the administrator from the repository root:
+Run migrations and create the administrator from the repository root:
 
 ```sh
-PYTHONPATH=app alembic -c app/alembic.ini upgrade head
+PYTHONPATH=app python -m alembic -c app/alembic.ini upgrade head
 python -m app.initial_data
 ```
 
-Transit-data seeding is currently manual: `app.core.db.add_nodes` imports the stop/route JSON files, but its invocation is commented out in `init_db`. Initialization creates the administrator only. Load transit records before starting the API; migrations and schema compatibility also need validation on a fresh database.
+For transit routing, import stop and route data:
+
+```sh
+python -m app.initial_data --seed-transit --stops /path/to/data.json --routes /path/to/route.json
+```
+
+Both seed files are JSON arrays. Stops require integer `id`, `name`, `latitude`, and `longitude`. Routes require `start` and `end` stop IDs, nonnegative `price` with at most two decimal places, positive `time`, and boolean `bi_directional`.
+
+## Usage
 
 ```sh
 uvicorn app.main:app --reload
 ```
 
-## API usage
+Open [the API docs](http://127.0.0.1:8000/docs) and select **Authorize** using the administrator's email as the username and the configured password. API routes use the `/api/v1` prefix; the docs describe requests for routing, places, contributions, and trip history.
 
-Open `http://127.0.0.1:8000/docs` for interactive requests. Routes use the default `/api/v1` prefix. Log in through `/auth/login/access-token` with an OAuth2 password form (`username` is the email address), then authorize requests with the returned bearer token.
+Distances are metres, durations minutes, and prices NGN.
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /trip/` | Stop-to-stop routing; query parameters: `start_id`, `end_id` (UUIDs), `optimize_by` (`0` price, `1` time). |
-| `POST /trip/default` | Road routing; JSON fields: `start_latitude`, `start_longitude`, `stop_latitude`, `stop_longitude`. |
-| `POST /trip/complete/{trip_id}` | Mark a saved trip complete. |
-| `GET /ye/stops`, `/ye/city`, `/ye/country`, `/places/` | Look up transport stops, locations, and places. |
-| `GET /user/trips/summary`, `/user/stats` | Retrieve trip history and statistics. |
-
-Paths in the table are relative to `/api/v1`. Account endpoints live under `/auth`, management under `/admin`, and contributions under `/contribute`.
-
-## Source layout
-
-- `app/api/router/` — HTTP endpoints.
-- `app/api/lib/` — transport and road graphs, geometry, and fare/time helpers.
-- `app/models.py`, `app/crud.py` — database models and account operations.
-- `app/core/` — settings, database initialization, authentication, and rate limiting.
-- `app/alembic/`, `app/email-templates/` — database migrations and email templates.
-
-## Current limitations
-
-This is a prototype. Transit routing currently requires known stops; automatic connections from arbitrary coordinates to transit stops are unfinished. Coverage depends on supplied data, and fare/time estimates do not use live traffic or pricing. There is no bundled frontend or automated test suite.
-
-Some admin, contributor, routing, and statistics workflows need fixes. Public sign-up currently defaults to superuser access, and contributor approval is incomplete; these need correction before public deployment.
-
-Licensed under the **MIT LICENSE**; see the repository's [LICENSE](https://github.com/nduonofitdavid/hitch-hiker/blob/HEAD/LICENSE).
+Licensed under the [MIT License](LICENSE).

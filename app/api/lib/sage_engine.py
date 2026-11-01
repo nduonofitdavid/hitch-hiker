@@ -1,189 +1,222 @@
-from collections import defaultdict
+"""Load revisioned transit graphs, select cheapest or fastest services, and cache route geometry."""
+
+from collections import OrderedDict, defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 import heapq
+import itertools
+import logging
+import math
+from threading import RLock
+from types import MappingProxyType
 from typing import Callable
 import uuid
 
 from sqlmodel import select, Session
 from sqlalchemy.orm import selectinload
 
-from app.models import Stops, Route, OptimizerWeight, TripIn, Country, City, CachedRoute, CachedStop
-from app.api.lib.sage_lib import haversine
-from app.api.lib.osm_engine import snap_and_traverse
-from app.core.db import engine
-
-class Loader:
-  """Load the knowledge tree from the database for traversal"""
-  def __init__(self):
-    self.stop_cache: dict[uuid.UUID, CachedStop] = {}
-    self._route_cache = defaultdict(list)
-    self._edge_lookup: dict[tuple[uuid.UUID, uuid.UUID], CachedRoute] = {}
-    self._route_geometry_cache: dict[tuple[uuid.UUID, uuid.UUID], tuple[list[tuple[float, float]], float]] = {}
-
-  def load_stops(self, session: Session, use_cache: bool=True):
-    if use_cache and self.stop_cache:
-      return self.stop_cache
-    stops = session.exec(select(Stops).where(Stops.is_active)).all()
-    new_stop_cache = {}
-    for stop in stops:
-      new_stop_cache[stop.id] = CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, opposite=None, city=stop.city, country=stop.country)
-    
-    self.stop_cache = new_stop_cache
-    return self.stop_cache
-  
-  def load_routes(self, session: Session, use_cache: bool=True):
-    if use_cache and self._route_cache:
-      return self._route_cache
-
-    routes = session.exec(select(Route).where(Route.is_active == True).options(selectinload(Route.transport_modes))).all()
-    new_route_cache = defaultdict(list)
-    new_edge_lookup = {}
-    
-    for route in routes:
-      cached_route = CachedRoute(start=route.start, end=route.end, time=route.time, price=route.price, transport_modes=[mode.name for mode in route.transport_modes])
-      new_route_cache[route.start].append(cached_route)
-      new_edge_lookup[(route.start, route.end)] = cached_route
-    
-    self._route_cache = new_route_cache
-    self._edge_lookup = new_edge_lookup
-
-    return self._route_cache
-    
-  def get_route(self, nodes: tuple[uuid.UUID, uuid.UUID]):
-    """Get a route by the route id"""
-    try:
-      return self._edge_lookup[nodes]
-    except KeyError:
-      return None
-
-  def load_route_geometry(self, session: Session):
-    """Preloads the geometry for the knowledge graph and caches it in a dictionary"""
-    routes = session.exec(select(Route).where(Route.is_active)).all()
-    new_routes = {}
-    for route in routes:
-      start = self.stop_cache[route.start]
-      end = self.stop_cache[route.end]
-      res = snap_and_traverse(start.get_coords(), end.get_coords())
-      if not res:
-        continue
-      path, dist = res
-      new_routes[(route.start, route.end)] = path, dist
-    self._route_geometry_cache = new_routes
-
-
-  def get_route_geometry(self, route_key: tuple[uuid.UUID, uuid.UUID]) -> tuple[list[tuple[float, float]], float] | None:
-    """Get a route geometry by the route key"""
-    if route_key in self._route_geometry_cache:
-      return self._route_geometry_cache[route_key]
-    return None
-
-  def refresh(self, session: Session):
-    """Refresh the cached data"""
-    self.load_stops(session=session, use_cache=False)
-    self.load_routes(session=session, use_cache=False)
-    self.load_route_geometry(session=session)
-
-def init_loader(loader: Loader) -> None:
-  """Fetch the initial data from the database upon server start-up"""
-  with Session(engine) as session:
-    loader.load_stops(session=session, use_cache=False)
-    loader.load_routes(session=session, use_cache=False)
-    loader.load_route_geometry(session=session)
-
-loader = Loader()
-init_loader(loader)
+from app.models import Stops, Route, OptimizerWeight, CachedRoute, CachedStop, GraphRevision
+from app.api.lib.geometry import haversine
+from app.api.lib.osm_engine import initialize_road_graph, reset_road_graph, route_coordinates, OutsideCoverage, RoutingUnavailable
 
 class SageGraph:
-  """This graph works on the knowledge tree"""
-  def __init__(self, vertices: dict[uuid.UUID, CachedStop], edges: dict[uuid.UUID, list[CachedRoute]]) -> None:
-    self.vertices = vertices
-    self.edges = edges
+  """A directed graph whose path reconstruction retains the chosen service."""
+  def __init__(self, vertices: Mapping[uuid.UUID, CachedStop], edges: Mapping[uuid.UUID, Sequence[CachedRoute]]):
+    """Copy stops and outgoing services into read-only graph mappings."""
+    self.vertices = MappingProxyType(dict(vertices))
+    self.edges = MappingProxyType({key: tuple(routes) for key, routes in edges.items()})
 
-  def get_vertices(self):
-    return self.vertices
-
-  def get_edges(self):
-    return self.edges
-
-  def update_edges(self, edges: dict[uuid.UUID, list[CachedRoute]]):
-    self.edges = edges
-
-  def update_vertices(self, vertices: dict[uuid.UUID, CachedStop]):
-    self.vertices = vertices
-
-  def _dijkstra_rev_path(self, start: uuid.UUID, previous: dict[uuid.UUID, uuid.UUID], destination: uuid.UUID):
-    route = []
-    current = destination
-    while True:
-      route.append(current)
-      if current == start:
-        break
-      if current not in previous:
-        return []
-      current = previous[current]
-    route.reverse()
-    return route
-
-  def dijkstra_or_astar(self, start: uuid.UUID, destination: uuid.UUID, weight: OptimizerWeight, heuristic: Callable|None = None):
-    if heuristic and (weight != OptimizerWeight.TIME):
-      raise ValueError("Heuristic can only be used with time as weight")
-    distance = {node_id: float("inf") for node_id in self.vertices}
-    distance[start] = 0
-    previous = {}
-    visited = set()
-
-    heap = [(0, start)]
-    while heap:
-      _, node_idx = heapq.heappop(heap)
-      if node_idx == destination:
-        break
-      if node_idx in visited:
-        continue
-      visited.add(node_idx)
-
-      for route in self.edges[node_idx]:
-        g_n = route.time if weight == OptimizerWeight.TIME else route.price
-        h_n = 0
-        if heuristic:
-          h_n = heuristic(self.vertices[route.end].get_coords(), self.vertices[destination].get_coords())
-        tentative_distance = distance[node_idx] + g_n
-        if tentative_distance < distance[route.end]:
-          distance[route.end] = tentative_distance
-          previous[route.end] = node_idx
-          heapq.heappush(heap, (tentative_distance + h_n, route.end)) # type: ignore
-
-    path_ids: list[uuid.UUID] = self._dijkstra_rev_path(start, previous, destination)
-    if not path_ids:
+  def shortest_routes(self, start: uuid.UUID, destination: uuid.UUID, weight: OptimizerWeight, heuristic: Callable | None=None) -> tuple[CachedRoute, ...] | None:
+    """Find the cheapest or fastest service sequence, validating any time heuristic."""
+    if start not in self.vertices or destination not in self.vertices:
       return None
-    return path_ids
+    if start == destination:
+      return ()
+    
+    estimates = {node: 0.0 for node in self.vertices}
+    if heuristic is not None:
+      if weight != OptimizerWeight.TIME:
+        raise ValueError("Heuristics can only optimize time")
+      estimates = {node: float(heuristic(stop.get_coords(), self.vertices[destination].get_coords())) for node, stop in self.vertices.items()}
+      if any(not math.isfinite(value) or value < 0 for value in estimates.values()) or abs(estimates[destination]) > 1e-9:
+        raise ValueError("A routing heuristic must be finite, nonnegative, and zero at the destination")
+    
+      for node, routes in self.edges.items():
+        if any(estimates[node] > route.time + estimates[route.end] + 1e-9 for route in routes):
+          raise ValueError("The heuristic overestimates a recorded connection; use Dijkstra")
+    
+    distances = {start: 0.0}
+    previous: dict[uuid.UUID, CachedRoute] = {}
+    counter = itertools.count()
+    heap = [(estimates[start], next(counter), 0.0, start)]
+    while heap:
+      _, _, distance, node = heapq.heappop(heap)
+      if distance != distances.get(node):
+        continue
+      if node == destination:
+        path = []
+        while node != start:
+          route = previous[node]
+          path.append(route)
+          node = route.start
+        return tuple(reversed(path))
+    
+      for route in self.edges.get(node, ()):
+        cost = route.time if weight == OptimizerWeight.TIME else route.price
+        if route.end not in self.vertices or not math.isfinite(cost) or cost < 0:
+          continue
+        candidate = distance + cost
+        if candidate < distances.get(route.end, math.inf):
+          distances[route.end] = candidate
+          previous[route.end] = route
+          heapq.heappush(heap, (candidate + estimates[route.end], next(counter), candidate, route.end))
+    return None
 
-SG = SageGraph(vertices=loader.stop_cache, edges=loader._route_cache)
+@dataclass(frozen=True)
+class RoutingSnapshot:
+  revision: int
+  routes: Mapping[uuid.UUID, CachedRoute]
+  graph: SageGraph
 
-def refresh_sage_graph(session: Session, loader: Loader, graph: SageGraph):
-  loader.refresh(session=session)
-  graph.update_vertices(vertices=loader.stop_cache)
-  graph.update_edges(edges=loader._route_cache)
+  @property
+  def stops(self) -> Mapping[uuid.UUID, CachedStop]:
+    """Return the immutable stops owned by this snapshot's graph."""
+    return self.graph.vertices
 
-def find_nearest(payload: TripIn):
-  best_start_distance = float("inf")
-  best_stop_distance  = float("inf")
+@dataclass(frozen=True)
+class RouteGeometry:
+  coordinates: tuple[tuple[float, float], ...]
+  distance: float
+  source: str
 
-  best_start_stop: uuid.UUID | None = None
-  best_stop_stop: uuid.UUID | None = None
+  @property
+  def estimated(self) -> bool:
+    """Indicate whether geometry differs from an unqualified road path."""
+    return self.source != "road"
 
-  stops = loader.stop_cache.values()
-  if not stops:
-    raise Exception("No node was found in the knowledge tree")
+def bump_graph_revision(session: Session) -> None:
+  """Publish graph changes in the same transaction as the changed records."""
+  dialect = session.get_bind().dialect.name
+  if dialect == "postgresql":
+    from sqlalchemy.dialects.postgresql import insert
+  elif dialect == "sqlite":
+    from sqlalchemy.dialects.sqlite import insert
+  else:
+    raise ValueError("Graph revision updates require PostgreSQL or SQLite")
+  
+  table = GraphRevision.__table__
+  statement = insert(table).values(id=1, version=1)
+  statement = statement.on_conflict_do_update(index_elements=[table.c.id], set_={"version": table.c.version + 1})
+  session.execute(statement)
 
-  for stop in stops:
-    n_start_dist = haversine((payload.start_latitude, payload.start_longitude), stop.get_coords())
-    if n_start_dist < best_start_distance:
-      best_start_distance = n_start_dist
-      best_start_stop = stop.id
+class Loader:
+  """Swap complete immutable graph snapshots; compute geometry only on demand."""
+  def __init__(self):
+    """Initialize an empty transit snapshot, synchronization lock, and geometry cache."""
+    self._snapshot = RoutingSnapshot(-1, MappingProxyType({}), SageGraph({}, {}))
+    self._lock = RLock()
+    self._geometry_cache = OrderedDict()
 
-    n_stop_dist = haversine((payload.stop_latitude, payload.stop_longitude), stop.get_coords())
-    if n_stop_dist < best_stop_distance:
-      best_stop_distance = n_stop_dist
-      best_stop_stop = stop.id
+  def _revision(self, session: Session) -> int:
+    """Read the database graph revision, treating a missing row as revision zero."""
+    return session.exec(select(GraphRevision.version).where(GraphRevision.id == 1)).first() or 0
 
-  result = [(best_start_stop, best_start_distance), (best_stop_stop, best_stop_distance)]
-  return result
+  def _build(self, session: Session, revision: int) -> RoutingSnapshot:
+    """Build an immutable snapshot of active stops and valid active services."""
+    stops = {
+      stop.id: CachedStop(id=stop.id, name=stop.name, latitude=stop.latitude, longitude=stop.longitude, opposite=stop.opposite, city=stop.city, country=stop.country)
+      for stop in session.exec(select(Stops).where(Stops.is_active).execution_options(populate_existing=True)).all()
+    }
+    adjacency = defaultdict(list)
+    routes = {}
+    for route in session.exec(select(Route).where(Route.is_active).options(selectinload(Route.transport_modes)).execution_options(populate_existing=True)).all():
+      if route.start not in stops or route.end not in stops:
+        logging.warning("Ignoring active route %s with inactive endpoints", route.id)
+        continue
+      if route.start == route.end or not math.isfinite(route.time) or route.time <= 0 or not math.isfinite(route.price) or route.price < 0:
+        logging.warning("Ignoring route %s with invalid costs or endpoints", route.id)
+        continue
+      cached = CachedRoute(id=route.id, start=route.start, end=route.end, time=route.time, price=float(route.price), transport_modes=tuple(mode.name for mode in route.transport_modes))
+      routes[cached.id] = cached
+      adjacency[cached.start].append(cached)
+    for outgoing in adjacency.values():
+      outgoing.sort(key=lambda route: str(route.id))
+    return RoutingSnapshot(revision, MappingProxyType(routes), SageGraph(stops, adjacency))
+
+  def snapshot(self, session: Session | None=None) -> RoutingSnapshot:
+    """Return the published snapshot, refreshing if a supplied session detects changes."""
+    if session is None:
+      return self._snapshot
+    revision = self._revision(session)
+    if revision == self._snapshot.revision:
+      return self._snapshot
+    return self.refresh(session)
+
+  def ensure_current(self, session: Session) -> RoutingSnapshot:
+    """Return a snapshot checked against the current database graph revision."""
+    return self.snapshot(session)
+
+  def refresh(self, session: Session) -> RoutingSnapshot:
+    """Publish a complete snapshot after confirming its database revision stayed stable."""
+    with self._lock:
+      # Rechecking the revision prevents publishing rows from mixed commits.
+      for _ in range(3):
+        revision = self._revision(session)
+        snapshot = self._build(session, revision)
+        if self._revision(session) == revision:
+          self._snapshot = snapshot
+          return snapshot
+      raise RoutingUnavailable("Transit data changed while loading; retry the request")
+
+  def get_route_geometry(self, route: CachedRoute | uuid.UUID, snapshot: RoutingSnapshot | None=None) -> RouteGeometry:
+    """Cache service geometry with physical distance and an explicit approximation source."""
+    snapshot = snapshot or self._snapshot
+    if isinstance(route, uuid.UUID):
+      route = snapshot.routes[route]
+    start, stop = snapshot.stops[route.start], snapshot.stops[route.end]
+    key = (route.id, start.get_coords(), stop.get_coords(), route.transport_modes)
+    with self._lock:
+      cached = self._geometry_cache.get(key)
+      if cached is not None:
+        self._geometry_cache.move_to_end(key)
+        return cached
+      
+    geometry = None
+    modes = {mode.casefold() for mode in route.transport_modes}
+    if modes & {"car", "bus", "taxi", "minibus", "motorcycle", "tricycle"}:
+      try:
+        journey = route_coordinates(start.get_coords(), stop.get_coords())
+        if journey is not None:
+          source = "road" if modes <= {"car", "taxi"} and journey.connector_distance < 0.01 and not journey.estimated else "road_approximation"
+          geometry = RouteGeometry(journey.coordinates, journey.distance, source)
+      except (OutsideCoverage, RoutingUnavailable):
+        pass
+    if geometry is None:
+      coords = (start.get_coords(), stop.get_coords())
+      geometry = RouteGeometry(coords, haversine(*coords), "straight_line_estimate")
+    
+    with self._lock:
+      self._geometry_cache[key] = geometry
+      self._geometry_cache.move_to_end(key)
+      while len(self._geometry_cache) > 10000:
+        self._geometry_cache.popitem(last=False)
+    return geometry
+
+loader = Loader()
+
+def initialize_routing(session: Session | None=None) -> RoutingSnapshot:
+  """Initialize car and walking road graphs and load the active transit snapshot."""
+  initialize_road_graph()
+  initialize_road_graph(mode="walk")
+  if session is not None:
+    return loader.refresh(session)
+  from app.core.db import engine
+  with Session(engine) as startup_session:
+    return loader.refresh(startup_session)
+
+def reset_routing() -> None:
+  """Clear process caches during shutdown or isolated tests."""
+  with loader._lock:
+    loader._snapshot = RoutingSnapshot(-1, MappingProxyType({}), SageGraph({}, {}))
+    loader._geometry_cache.clear()
+  reset_road_graph()

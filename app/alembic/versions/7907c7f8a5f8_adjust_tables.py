@@ -1,4 +1,4 @@
-"""Adjust tables
+"""Establish the initial migration revision without changing the schema.
 
 Revision ID: 7907c7f8a5f8
 Revises: 
@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-  """Upgrade schema."""
+  """Record the initial empty migration without changing the schema."""
   pass
 
 
 def downgrade() -> None:
-  """Downgrade schema."""
+  """Reverse the initial empty migration without changing the schema."""
   pass
